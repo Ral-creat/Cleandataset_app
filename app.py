@@ -18,8 +18,9 @@ except ImportError:
 
 # --- Configuration ---
 warnings.filterwarnings("ignore")
-CSV_PATH = "cleaned_flood_data.csv"
-OUTDIR = "." # Use current directory for file saving
+# Ensure your 'cleaned_flood_data.csv' is in the same directory as this script.
+CSV_PATH = "cleaned_flood_data.csv" 
+OUTDIR = "." 
 
 # --- Helper Functions ---
 def find_col(df_cols, keywords):
@@ -44,7 +45,7 @@ def clean_damage_value(value):
     """Robustly cleans string values (e.g., '10,000,000.00') to numeric."""
     if pd.isna(value):
         return 0.0
-    s = str(value).replace(',', '') # Remove commas
+    s = str(value).replace(',', '') 
     return pd.to_numeric(re.sub(r'[^\d.]', '', s), errors='coerce')
 
 
@@ -60,7 +61,7 @@ def run_analysis(csv_path):
     try:
         df = pd.read_csv(csv_path, encoding='latin1', low_memory=False)
     except Exception:
-        df = pd.read_csv(csv_path, low_memory=False) # Fallback to default encoding
+        df = pd.read_csv(csv_path, low_memory=False) 
 
     # --- Column Detection ---
     df_cols = df.columns.tolist()
@@ -79,8 +80,7 @@ def run_analysis(csv_path):
         df['__combined_date'] = df[date_col].astype(str) + ' ' + df[day_col].astype(str) + ', ' + df[year_col].astype(str)
         temp_date_col = '__combined_date'
     else:
-        # Fallback for inconsistent date format/columns
-        temp_date_col = date_col if date_col else 'Date' # Assuming 'Date' still holds month info
+        temp_date_col = date_col if date_col else 'Date' 
 
     df[temp_date_col] = pd.to_datetime(df[temp_date_col], errors='coerce', infer_datetime_format=True)
     df = df.sort_values(by=temp_date_col).reset_index(drop=True)
@@ -89,8 +89,8 @@ def run_analysis(csv_path):
 
     # --- Water Level Handling ---
     if water_col is None:
-        raise ValueError("No water-level column found. Please check column names.")
-
+        if is_streamlit: st.error("No water-level column found. Please check column names.")
+        return
     df['Cleaned_Water_Level'] = df[water_col].apply(clean_water_level)
     water_col = 'Cleaned_Water_Level'
     df[water_col] = df[water_col].interpolate(method='linear', limit_direction='both')
@@ -119,15 +119,15 @@ def run_analysis(csv_path):
 
     if area_col and area_col in df.columns:
         most_affected_by_year = df[df['is_flood']].groupby(['year', area_col]).size().reset_index(name='Flood_Count')
-        # Find the most affected barangay each year
         idx = most_affected_by_year.groupby(['year'])['Flood_Count'].transform(max) == most_affected_by_year['Flood_Count']
+        # Filter for the most affected barangay each year
         most_affected_barangays = most_affected_by_year[idx].sort_values(by='year')
     else:
         most_affected_barangays = pd.DataFrame()
 
-    # --- PLOTS ---
-
-    # 1. Monthly Flood Occurrence Heatmap (Request 1)
+    # --- PLOTS --- (Saving plots to disk for Streamlit to read)
+    
+    # 1. Monthly Flood Occurrence Heatmap 
     df['month'] = df.index.month
     monthly_yearly_counts = df.groupby(['year', 'month']).size().reset_index(name='Flood_Count')
     monthly_yearly_counts['Month_Name'] = monthly_yearly_counts['month'].apply(lambda x: pd.to_datetime(str(x), format='%m').strftime('%b'))
@@ -146,12 +146,11 @@ def run_analysis(csv_path):
     plt.ylabel('Month')
     plt.tight_layout()
     plt.savefig(os.path.join(OUTDIR, "monthly_flood_occurrence_heatmap.png"))
-    plt.close() # Close plot for Streamlit
+    plt.close() 
 
-    # 2. Most Affected Barangays (Request 2)
+    # 2. Most Affected Barangays 
     plt.figure(figsize=(12, 5))
-    if not most_affected_barangays.empty:
-        # Show top 10 most affected across ALL years
+    if not df[area_col].isnull().all():
         overall_most_affected = df[df['is_flood']].groupby(area_col).size().sort_values(ascending=False).head(10)
         overall_most_affected.plot(kind='bar')
         plt.title(f"Top 10 Overall Affected Areas ({area_col}) by Flood Count")
@@ -163,7 +162,7 @@ def run_analysis(csv_path):
     plt.savefig(os.path.join(OUTDIR, "most_affected_areas_overall.png"))
     plt.close()
 
-    # 3. Average Water Level per Year (Request 3)
+    # 3. Average Water Level per Year
     plt.figure(figsize=(8, 4))
     avg_water_per_year.plot(kind='bar')
     plt.title("Average Water Level per Year")
@@ -172,7 +171,7 @@ def run_analysis(csv_path):
     plt.tight_layout(); plt.savefig(os.path.join(OUTDIR,"avg_water_per_year.png"))
     plt.close()
 
-    # 4. Common Cause of Flood (Request 4)
+    # 4. Common Cause of Flood
     if flood_cause_col and flood_cause_col in df.columns:
         flood_causes_counts = df[flood_cause_col].value_counts().head(10)
         plt.figure(figsize=(10, 5))
@@ -188,27 +187,35 @@ def run_analysis(csv_path):
         for c in total_damage_per_year.columns:
             plt.plot(total_damage_per_year.index, total_damage_per_year[c], marker='o', label=c)
         plt.title("Total Damage per Year")
-        plt.xlabel("Year"); plt.ylabel("Damage (PhP)") # Assuming Philippine Pesos as common currency
+        plt.xlabel("Year"); plt.ylabel("Damage (PhP)") 
         plt.legend(title='Damage Type')
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.ticklabel_format(style='plain', axis='y')
         plt.tight_layout(); plt.savefig(os.path.join(OUTDIR,"total_damage_per_year.png"))
         plt.close()
+        
+    # Water Level Time Series (Required for complete visualization)
+    plt.figure(figsize=(12,4))
+    plt.plot(df.index, df[water_col], label='Water Level')
+    plt.scatter(df.index[df['is_flood']], df[water_col][df['is_flood']], s=20, color='red', label='Flood Event (Heuristic)')
+    plt.title("Water Level with Flood Event Markers")
+    plt.xlabel("Date"); plt.ylabel(str(water_col))
+    plt.legend()
+    plt.tight_layout(); plt.savefig(os.path.join(OUTDIR,"water_level_with_flood_markers.png"))
+    plt.close()
+
 
     # 6. SARIMA Time Series
     series = df[water_col].resample('M').mean().fillna(0)
+    mae, mse = None, None
     if len(series) >= 12:
-        # Simplified SARIMA for Streamlit (to avoid long processing)
-        if is_streamlit:
-            p, d, q = 1, 0, 0; P, D, Q = 1, 0, 0
-            order = (p,d,q); s_order = (P,D,Q,12)
-        else:
-            # Use the best order found in the VM step: ((0, 0, 0), (0, 0, 1, 12))
-            p, d, q = 0, 0, 0; P, D, Q = 0, 0, 1
-            order = (p,d,q); s_order = (P,D,Q,12)
+        # Use the best parameters found in previous step: ((0, 0, 0), (0, 0, 1, 12))
+        p, d, q = 0, 0, 0; P, D, Q = 0, 0, 1
+        order = (p,d,q); s_order = (P,D,Q,12)
 
         split = int(len(series)*0.8)
         train = series.iloc[:split]; test = series.iloc[split:]
+        
         try:
             mod = SARIMAX(train, order=order, seasonal_order=s_order,
                           enforce_stationarity=False, enforce_invertibility=False)
@@ -225,7 +232,8 @@ def run_analysis(csv_path):
             plt.tight_layout(); plt.savefig(os.path.join(OUTDIR,"sarima_actual_vs_forecast.png"))
             plt.close()
         except Exception as e:
-            print(f"SARIMA failed in app: {e}")
+            if is_streamlit: st.warning(f"SARIMA execution failed: {e}")
+            else: print(f"SARIMA execution failed: {e}")
 
     # --- Streamlit Display ---
     if is_streamlit:
@@ -235,12 +243,13 @@ def run_analysis(csv_path):
         st.header("1. Flood Pattern and Occurrence")
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader("Monthly Flood Occurrence Heatmap")
+            st.subheader("Monthly Flood Occurrence Heatmap (Pattern)")
             st.image(os.path.join(OUTDIR, "monthly_flood_occurrence_heatmap.png"))
         with col2:
             st.subheader("Flood Occurrences per Year")
             st.image(os.path.join(OUTDIR, "floods_per_year.png"))
-            st.dataframe(floods_per_year.rename("Flood Count").to_frame())
+            # --- FIX APPLIED HERE: Converted Series to DataFrame with reset_index()
+            st.dataframe(floods_per_year.rename("Flood Count").to_frame().reset_index()) 
 
 
         st.markdown("---")
@@ -254,12 +263,44 @@ def run_analysis(csv_path):
             st.subheader("Top Affected Barangays")
             st.image(os.path.join(OUTDIR, "most_affected_areas_overall.png"))
             if not most_affected_barangays.empty:
-                st.markdown("**Most Affected Barangay per Year:**")
-                st.dataframe(most_affected_barangays.set_index('year'))
+                st.markdown("**Most Affected Barangay per Year (Summary):**")
+                # Ensure the DataFrame is properly structured for display
+                st.dataframe(most_affected_barangays)
 
         with col4:
             st.subheader("Top 10 Common Flood Causes")
             if os.path.exists(os.path.join(OUTDIR, "top_flood_causes.png")):
                 st.image(os.path.join(OUTDIR, "top_flood_causes.png"))
             else:
-                st.
+                st.error("Flood Cause data not available.")
+
+        st.markdown("---")
+        st.header("4. SARIMA Time Series and Prediction")
+        col5, col6 = st.columns(2)
+        with col5:
+            st.subheader("Average Water Level per Year")
+            st.image(os.path.join(OUTDIR, "avg_water_per_year.png"))
+        with col6:
+            st.subheader("SARIMA Forecast (Monthly Average Water)")
+            if os.path.exists(os.path.join(OUTDIR, "sarima_actual_vs_forecast.png")):
+                st.image(os.path.join(OUTDIR, "sarima_actual_vs_forecast.png"))
+                if mae is not None:
+                    st.write(f"**Model Metrics:** MAE: `{mae:.2f}`, MSE: `{mse:.2f}` (Testing Set)")
+            else:
+                st.warning("SARIMA plot not available (requires >=12 months of data or failed to run).")
+
+
+        if not total_damage_per_year.empty:
+            st.markdown("---")
+            st.header("5. Infrastructure and Agriculture Damage")
+            st.image(os.path.join(OUTDIR,"total_damage_per_year.png"))
+            st.dataframe(total_damage_per_year)
+
+# Run the analysis
+if is_streamlit:
+    run_analysis(CSV_PATH)
+else:
+    # This block is for running in a non-Streamlit environment like Colab
+    run_analysis(CSV_PATH) 
+    print("\n\n--- Analysis Complete ---")
+    print("Run `streamlit run flood_analysis_app.py` after saving the file to view the dashboard.")
